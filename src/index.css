@@ -1,0 +1,124 @@
+@import "tailwindcss";
+
+@theme {
+  --font-display: "方正锐正黑简体", "方正锐正黑_GBK", "方正锐黑简体", "FZRuiZhengHei", "方正锐黑", system-ui, sans-serif;
+  --font-sans: "方正锐正黑简体", "方正锐正黑_GBK", "方正锐黑简体", "FZRuiZhengHei", "方正锐黑", system-ui, sans-serif;
+  --color-ink: #1a1a1a;
+  --color-ink-soft: #3d3d3d;
+  --color-champagne: #c9a962;
+  --color-champagne-light: #e8d5a3;
+  --color-champagne-dark: #a88b3d;
+  --color-cream: #f7f4ef;
+  --color-cream-dark: #ebe6dc;
+  --color-stone: #8a857c;
+  --color-mist: #f0ebe3;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  margin: 0;
+  min-height: 100%;
+  width: 100%;
+}
+
+html {
+  font-size: 20px;
+}
+
+body {
+  font-family: var(--font-sans);
+  color: var(--color-ink);
+  background: var(--color-cream);
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  background-image:
+    radial-gradient(circle at 16% -10%, #ead7aa66 0%, transparent 35%),
+    radial-gradient(circle at 96% 14%, #d9bd7b40 0%, transparent 28%);
+}
+
+@keyframes fade-up {
+  from {
+    opacity: 0;
+    transform: translateY(12px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes shimmer {
+  0% {
+    background-position: -200% 0;
+  }
+  100% {
+    background-position: 200% 0;
+  }
+}
+
+@keyframes pulse-ring {
+  0% {
+    transform: scale(0.9);
+    opacity: 0.6;
+  }
+  50% {
+    transform: scale(1.05);
+    opacity: 1;
+  }
+  100% {
+    transform: scale(0.9);
+    opacity: 0.6;
+  }
+}
+
+.animate-fade-up {
+  animation: fade-up 0.5s ease-out both;
+}
+
+.animate-shimmer {
+  background: linear-gradient(
+    90deg,
+    var(--color-cream-dark) 25%,
+    var(--color-mist) 50%,
+    var(--color-cream-dark) 75%
+  );
+  background-size: 200% 100%;
+  animation: shimmer 1.5s infinite;
+}
+
+.animate-pulse-ring {
+  animation: pulse-ring 2s ease-in-out infinite;
+}
+
+.lux-card {
+  border: 1px solid color-mix(in srgb, var(--color-cream-dark) 70%, white 30%);
+  background: linear-gradient(
+    180deg,
+    rgba(255, 255, 255, 0.92) 0%,
+    rgba(247, 244, 239, 0.78) 100%
+  );
+  box-shadow:
+    0 10px 28px rgba(24, 24, 24, 0.08),
+    0 1px 0 rgba(255, 255, 255, 0.8) inset;
+}
+
+.lux-gold-btn {
+  background: linear-gradient(135deg, #0f0f0f 0%, #2a2a2a 46%, #171717 100%);
+  box-shadow:
+    0 8px 22px rgba(26, 26, 26, 0.35),
+    0 0 0 1px rgba(232, 213, 163, 0.22) inset;
+}
+
+.lux-gold-btn:hover {
+  filter: brightness(1.06);
+}
+
+.lux-pill {
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.95), rgba(240, 235, 227, 0.82));
+  border: 1px solid rgba(168, 139, 61, 0.28);
+}
