@@ -29,7 +29,14 @@ export type SceneTemplate =
   | 'macro'
 
 /** High-level output style for jewelry shoots */
-export type ImageType = 'product_white' | 'model' | 'atmosphere'
+export type ImageType =
+  | 'product_white'
+  | 'model_bracelet_bangle'
+  | 'model_earring'
+  | 'model_necklace_pendant'
+  | 'model_ring'
+  | 'model_set'
+  | 'atmosphere'
 
 export type GenerateMode = 'text' | 'reference'
 export type StudioMode = 'guide' | 'agent'
@@ -49,6 +56,16 @@ export interface GenerationParams {
   referenceItemsCount?: number
   /** detected style type from B zone */
   referenceStyleType?: ImageType
+}
+
+export function isModelImageType(type: ImageType): boolean {
+  return (
+    type === 'model_bracelet_bangle' ||
+    type === 'model_earring' ||
+    type === 'model_necklace_pendant' ||
+    type === 'model_ring' ||
+    type === 'model_set'
+  )
 }
 
 export interface ImageTypeOption {
@@ -152,11 +169,43 @@ export const IMAGE_TYPES: ImageTypeOption[] = [
     defaultScene: 'white_bg',
   },
   {
-    value: 'model',
-    label: '模特图',
-    desc: '真人佩戴 · 种草 / 详情页场景',
-    useCase: '适合手部、耳部、颈部佩戴展示',
-    sampleUrl: '/samples/model.png',
+    value: 'model_bracelet_bangle',
+    label: '模特图-手链手镯',
+    desc: '手部佩戴 · 手链/手镯细节展示',
+    useCase: '适合手部特写、手腕佩戴场景',
+    sampleUrl: '/samples/model-bracelet-bangle.png',
+    defaultScene: 'lifestyle_hand',
+  },
+  {
+    value: 'model_earring',
+    label: '模特图-耳钉耳环',
+    desc: '耳部佩戴 · 脸部局部与耳饰关系',
+    useCase: '适合耳钉、耳环上耳展示',
+    sampleUrl: '/samples/model-earring.png',
+    defaultScene: 'lifestyle_hand',
+  },
+  {
+    value: 'model_necklace_pendant',
+    label: '模特图-项链吊坠',
+    desc: '颈部佩戴 · 锁骨与胸前构图',
+    useCase: '适合项链、吊坠上身展示',
+    sampleUrl: '/samples/model-necklace-pendant.png',
+    defaultScene: 'lifestyle_hand',
+  },
+  {
+    value: 'model_ring',
+    label: '模特图-戒指',
+    desc: '手指佩戴 · 戒圈与手部姿态',
+    useCase: '适合单戒、叠戴戒指展示',
+    sampleUrl: '/samples/model-ring.png',
+    defaultScene: 'lifestyle_hand',
+  },
+  {
+    value: 'model_set',
+    label: '模特图-首饰套装',
+    desc: '多件同框 · 耳饰/项链/戒指协同',
+    useCase: '适合套装搭配与成套销售展示',
+    sampleUrl: '/samples/model-set.png',
     defaultScene: 'lifestyle_hand',
   },
   {
@@ -219,8 +268,16 @@ const SCENE_TEXT: Record<SceneTemplate, string> = {
 const IMAGE_TYPE_TEXT: Record<ImageType, string> = {
   product_white:
     '产品白底图：适合电商主图，主体独立展示，无模特无道具，背景干净纯白',
-  model:
-    '模特图：真人佩戴展示，突出上身/手部佩戴效果，兼顾肤色与珠宝质感',
+  model_bracelet_bangle:
+    '模特图-手链手镯：真人手腕佩戴展示，突出手链/手镯在手部动作中的质感与比例',
+  model_earring:
+    '模特图-耳钉耳环：真人耳部佩戴展示，突出耳饰与脸部轮廓关系，强调耳部近景质感',
+  model_necklace_pendant:
+    '模特图-项链吊坠：真人颈部佩戴展示，突出锁骨线条与吊坠垂坠关系，强调上身效果',
+  model_ring:
+    '模特图-戒指：真人手指佩戴展示，突出戒圈比例、手部姿态与戒面细节',
+  model_set:
+    '模特图-首饰套装：真人多件套佩戴展示，突出耳饰、项链、戒指/手链的整体搭配与统一风格',
   atmosphere:
     '氛围图：品牌情境大片，强调光影、色彩与陈列氛围，营造高端视觉感受',
 }
@@ -228,7 +285,11 @@ const IMAGE_TYPE_TEXT: Record<ImageType, string> = {
 /** Scenes that make sense under each image type (for optional fine-tune) */
 export const SCENES_BY_IMAGE_TYPE: Record<ImageType, SceneTemplate[]> = {
   product_white: ['white_bg', 'macro'],
-  model: ['lifestyle_hand'],
+  model_bracelet_bangle: ['lifestyle_hand'],
+  model_earring: ['lifestyle_hand'],
+  model_necklace_pendant: ['lifestyle_hand'],
+  model_ring: ['lifestyle_hand'],
+  model_set: ['lifestyle_hand'],
   atmosphere: ['velvet_box', 'marble', 'editorial', 'macro'],
 }
 
@@ -245,7 +306,7 @@ export function buildPrompt(params: GenerationParams): string {
       ? SCENE_TEXT.macro
       : imageType === 'atmosphere'
         ? SCENE_TEXT[params.scene]
-        : imageType === 'model'
+        : isModelImageType(imageType)
           ? SCENE_TEXT.lifestyle_hand
           : SCENE_TEXT.white_bg
 

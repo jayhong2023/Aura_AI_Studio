@@ -50,7 +50,14 @@ export interface AgentReviseRequest {
   basePrompt: string
   instruction: string
   history?: Array<{ role: 'user' | 'assistant'; content: string }>
-  targetImageType?: 'product_white' | 'model' | 'atmosphere'
+  targetImageType?:
+    | 'product_white'
+    | 'model_bracelet_bangle'
+    | 'model_earring'
+    | 'model_necklace_pendant'
+    | 'model_ring'
+    | 'model_set'
+    | 'atmosphere'
 }
 
 export interface AgentReviseResponse {

@@ -80,7 +80,7 @@ export function ImageTypePicker({
           })}
         </div>
       ) : (
-        <div className="grid grid-cols-1 gap-2.5 md:grid-cols-3">
+        <div className="grid grid-cols-1 gap-2.5 md:grid-cols-3 xl:grid-cols-4">
           {IMAGE_TYPES.map((opt) => {
             const selected = opt.value === value
             return (
@@ -127,17 +127,13 @@ export function ImageTypePicker({
                     <span className="absolute top-1.5 left-1.5 h-2 w-2 rounded-full bg-champagne shadow" />
                   )}
                 </div>
-                <div className="space-y-0.5 px-2.5 py-2">
+                <div className="px-2.5 py-2">
                   <p
                     className={`text-sm font-medium ${
                       selected ? 'text-ink' : 'text-ink-soft'
                     }`}
                   >
                     {opt.label}
-                  </p>
-                  <p className="text-xs leading-snug text-stone">{opt.desc}</p>
-                  <p className="text-xs leading-snug text-champagne-dark">
-                    {opt.useCase}
                   </p>
                 </div>
               </button>

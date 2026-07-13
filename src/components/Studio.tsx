@@ -12,6 +12,7 @@ import {
   buildPrompt,
   DEFAULT_PARAMS,
   IMAGE_TYPES,
+  isModelImageType,
   type Artwork,
   type GenerationParams,
   type ImageType,
@@ -35,7 +36,9 @@ export function Studio({
   const [productRefs, setProductRefs] = useState<ReferenceImage[]>([])
   const [styleRefs, setStyleRefs] = useState<ReferenceImage[]>([])
   const [detectedProductCount, setDetectedProductCount] = useState(0)
-  const [detectedStyleType, setDetectedStyleType] = useState<ImageType>('model')
+  const [detectedStyleType, setDetectedStyleType] = useState<ImageType>(
+    'model_necklace_pendant',
+  )
   const [promptDraft, setPromptDraft] = useState('')
   const [promptTouched, setPromptTouched] = useState(false)
   const [lockTargetType, setLockTargetType] = useState(false)
@@ -104,10 +107,15 @@ export function Studio({
           setParams((prev) => {
             const meta = IMAGE_TYPES.find((t) => t.value === style)
             if (!meta) return prev
+            const nextImageType =
+              isModelImageType(style) && isModelImageType(prev.imageType)
+                ? prev.imageType
+                : style
+            const nextMeta = IMAGE_TYPES.find((t) => t.value === nextImageType)
             return {
               ...prev,
-              imageType: style,
-              scene: meta.defaultScene,
+              imageType: nextImageType,
+              scene: nextMeta?.defaultScene ?? meta.defaultScene,
             }
           })
           setPromptTouched(false)

@@ -97,25 +97,29 @@ function hamming(a: string, b: string): number {
 export async function detectStyleTypeFromB(
   styleRefs: ReferenceImage[],
 ): Promise<ImageType> {
-  if (styleRefs.length === 0) return 'model'
+  if (styleRefs.length === 0) return 'model_necklace_pendant'
 
-  const votes: Record<ImageType, number> = {
-    product_white: 0,
-    model: 0,
-    atmosphere: 0,
-  }
+  let productWhiteVotes = 0
+  let modelVotes = 0
+  let atmosphereVotes = 0
 
   for (const ref of styleRefs.slice(0, 6)) {
     const s = await computeStats(ref.dataUrl)
     const isWhiteBg = s.luminanceMean > 220 && s.luminanceStd < 45
     const isModel = s.skinRatio > 0.08
-    if (isWhiteBg) votes.product_white += 1
-    else if (isModel) votes.model += 1
-    else votes.atmosphere += 1
+    if (isWhiteBg) productWhiteVotes += 1
+    else if (isModel) modelVotes += 1
+    else atmosphereVotes += 1
   }
 
-  return (Object.entries(votes).sort((a, b) => b[1] - a[1])[0]?.[0] ??
-    'model') as ImageType
+  if (productWhiteVotes >= modelVotes && productWhiteVotes >= atmosphereVotes) {
+    return 'product_white'
+  }
+  if (modelVotes >= atmosphereVotes) {
+    // B 区只能粗分“模特图”，默认映射到较通用的项链/吊坠模特类型。
+    return 'model_necklace_pendant'
+  }
+  return 'atmosphere'
 }
 
 export async function estimateProductCountFromA(

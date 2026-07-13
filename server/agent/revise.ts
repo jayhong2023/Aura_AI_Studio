@@ -1,5 +1,26 @@
 import type { AgentReviseRequest, AgentReviseResponse } from '../types'
 
+type TargetImageType = NonNullable<AgentReviseRequest['targetImageType']>
+
+const MODEL_TYPE_SCENE_TEXT: Record<
+  Exclude<
+    TargetImageType,
+    'product_white' | 'atmosphere'
+  >,
+  string
+> = {
+  model_bracelet_bangle:
+    '模特图-手链手镯：真人手腕佩戴展示，突出手链/手镯在手部动作中的质感与比例，构图聚焦手部与腕部',
+  model_earring:
+    '模特图-耳钉耳环：真人耳部佩戴展示，突出耳饰与脸部轮廓关系，构图聚焦耳部近景',
+  model_necklace_pendant:
+    '模特图-项链吊坠：真人颈部佩戴展示，突出锁骨线条与吊坠垂坠关系，构图聚焦颈部上身',
+  model_ring:
+    '模特图-戒指：真人手指佩戴展示，突出戒圈比例与手部姿态，构图聚焦手指近景',
+  model_set:
+    '模特图-首饰套装：真人多件套佩戴展示，耳饰、项链、戒指/手链整体搭配，构图兼顾整体与重点细节',
+}
+
 /**
  * Lightweight jewelry-aware prompt reviser (no extra LLM key required).
  * Maps common Chinese / English tweak instructions onto the working prompt.
@@ -182,13 +203,10 @@ export function revisePrompt(req: AgentReviseRequest): AgentReviseResponse {
   }
 
   const imageType = detectPrimaryImageTypeIntent(instruction)
-  if (imageType === 'model') {
-    prompt = replaceScene(
-      prompt,
-      '模特图：真人佩戴展示，佩戴部位与参考图一致（耳部/颈部/手部），构图以人物佩戴效果为主，珠宝为视觉焦点',
-    )
+  if (imageType && isModelImageType(imageType)) {
+    prompt = replaceScene(prompt, MODEL_TYPE_SCENE_TEXT[imageType])
     prompt = appendClauseIfMissing(prompt, '禁止生成白底静物图或纯产品陈列图')
-    notes.push('严格按模特图生成')
+    notes.push(`严格按${imageTypeLabel(imageType)}生成`)
     matched = true
   } else if (imageType === 'product_white') {
     prompt = replaceScene(
@@ -264,7 +282,7 @@ function replaceStone(prompt: string, stone: string): string {
 function replaceScene(prompt: string, scene: string): string {
   const patterns = [
     /产品白底图：[^，]*(?:，[^，]+){0,6}/,
-    /模特图：[^，]*(?:，[^，]+){0,6}/,
+    /模特图(?:-[^，,]+)?：[^，]*(?:，[^，]+){0,6}/,
     /氛围图：[^，]*(?:，[^，]+){0,6}/,
     /纯白无缝背景[^，]*(?:，[^，]+){0,4}/,
     /真人手部佩戴展示[^，]*(?:，[^，]+){0,4}/,
@@ -306,10 +324,10 @@ function hasExplicitChangeIntent(instruction: string): boolean {
 
 function detectPrimaryImageTypeIntent(
   instruction: string,
-): 'product_white' | 'model' | 'atmosphere' | null {
+): TargetImageType | null {
   const normalized = instruction.toLowerCase()
   const candidates: Array<{
-    type: 'product_white' | 'model' | 'atmosphere'
+    type: TargetImageType
     index: number
   }> = [
     {
@@ -323,7 +341,54 @@ function detectPrimaryImageTypeIntent(
       ),
     },
     {
-      type: 'model',
+      type: 'model_bracelet_bangle',
+      index: Math.max(
+        normalized.lastIndexOf('手链'),
+        normalized.lastIndexOf('手镯'),
+        normalized.lastIndexOf('手环'),
+        normalized.lastIndexOf('bracelet'),
+        normalized.lastIndexOf('bangle'),
+      ),
+    },
+    {
+      type: 'model_earring',
+      index: Math.max(
+        normalized.lastIndexOf('耳钉'),
+        normalized.lastIndexOf('耳环'),
+        normalized.lastIndexOf('耳坠'),
+        normalized.lastIndexOf('earring'),
+        normalized.lastIndexOf('stud'),
+      ),
+    },
+    {
+      type: 'model_necklace_pendant',
+      index: Math.max(
+        normalized.lastIndexOf('项链'),
+        normalized.lastIndexOf('吊坠'),
+        normalized.lastIndexOf('锁骨链'),
+        normalized.lastIndexOf('necklace'),
+        normalized.lastIndexOf('pendant'),
+      ),
+    },
+    {
+      type: 'model_ring',
+      index: Math.max(
+        normalized.lastIndexOf('戒指'),
+        normalized.lastIndexOf('对戒'),
+        normalized.lastIndexOf('ring'),
+      ),
+    },
+    {
+      type: 'model_set',
+      index: Math.max(
+        normalized.lastIndexOf('套装'),
+        normalized.lastIndexOf('成套'),
+        normalized.lastIndexOf('set'),
+        normalized.lastIndexOf('jewelry set'),
+      ),
+    },
+    {
+      type: 'model_necklace_pendant',
       index: Math.max(
         normalized.lastIndexOf('模特'),
         normalized.lastIndexOf('佩戴'),
@@ -350,13 +415,10 @@ function detectPrimaryImageTypeIntent(
 
 function applyLockedImageType(
   prompt: string,
-  type: 'product_white' | 'model' | 'atmosphere',
+  type: TargetImageType,
 ): string {
-  if (type === 'model') {
-    let next = replaceScene(
-      prompt,
-      '模特图：真人佩戴展示，佩戴部位与参考图一致（耳部/颈部/手部），构图以人物佩戴效果为主，珠宝为视觉焦点',
-    )
+  if (isModelImageType(type)) {
+    let next = replaceScene(prompt, MODEL_TYPE_SCENE_TEXT[type])
     next = appendClauseIfMissing(next, '禁止生成白底静物图或纯产品陈列图')
     return next
   }
@@ -376,8 +438,22 @@ function applyLockedImageType(
   )
 }
 
-function imageTypeLabel(type: 'product_white' | 'model' | 'atmosphere'): string {
+function imageTypeLabel(type: TargetImageType): string {
   if (type === 'product_white') return '产品白底图'
-  if (type === 'model') return '模特图'
+  if (type === 'model_bracelet_bangle') return '模特图-手链手镯'
+  if (type === 'model_earring') return '模特图-耳钉耳环'
+  if (type === 'model_necklace_pendant') return '模特图-项链吊坠'
+  if (type === 'model_ring') return '模特图-戒指'
+  if (type === 'model_set') return '模特图-首饰套装'
   return '氛围图'
+}
+
+function isModelImageType(type: TargetImageType): boolean {
+  return (
+    type === 'model_bracelet_bangle' ||
+    type === 'model_earring' ||
+    type === 'model_necklace_pendant' ||
+    type === 'model_ring' ||
+    type === 'model_set'
+  )
 }
