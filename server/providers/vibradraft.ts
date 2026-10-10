@@ -1,4 +1,5 @@
 import { serverConfig } from '../config'
+import { getGenerationSettings } from '../settings/store'
 import type { GenerateImageResult, GenerateRequestBody } from '../types'
 
 interface JsonRpcSuccess {
@@ -16,7 +17,29 @@ function sleep(ms: number) {
   return new Promise((r) => setTimeout(r, ms))
 }
 
+class RateLimitError extends Error {
+  constructor(readonly retryAfterMs: number) {
+    super('VibraDraft 调用过于频繁（每分钟 60 次上限），请稍后重试')
+  }
+}
+
+/** The MCP token is limited to 60 calls/minute; wait out short bursts. */
 async function mcpCall(
+  method: string,
+  params: Record<string, unknown>,
+  id: number,
+): Promise<JsonRpcSuccess> {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await mcpCallOnce(method, params, id)
+    } catch (e) {
+      if (!(e instanceof RateLimitError) || attempt >= 3) throw e
+      await sleep(Math.min(30_000, Math.max(2_000, e.retryAfterMs)))
+    }
+  }
+}
+
+async function mcpCallOnce(
   method: string,
   params: Record<string, unknown>,
   id: number,
@@ -53,6 +76,10 @@ async function mcpCall(
 
     if (!res.ok) {
       const text = await res.text()
+      if (res.status === 429) {
+        const retryAfter = Number(/"retryAfterMs"\s*:\s*(\d+)/.exec(text)?.[1])
+        throw new RateLimitError(Number.isFinite(retryAfter) ? retryAfter : 10_000)
+      }
       throw new Error(`VibraDraft MCP HTTP ${res.status}: ${text.slice(0, 200)}`)
     }
 
@@ -105,18 +132,30 @@ function simplifyProviderError(raw: string): string {
         error?: { message?: string }
       }
       if (nested.error?.message) {
-        const m = nested.error.message
-        if (/not valid/i.test(m)) {
-          return '参考图格式无效，请改用 JPG/PNG 后重试'
-        }
-        return m
+        return localizeProviderMessage(nested.error.message)
       }
     }
   } catch {
     // keep raw
   }
+  return localizeProviderMessage(raw)
+}
+
+function localizeProviderMessage(raw: string): string {
   if (/not valid/i.test(raw)) {
     return '参考图格式无效，请改用 JPG/PNG 后重试'
+  }
+  if (/did not generate an image/i.test(raw)) {
+    return '模型未返回图片。可换一张参考图、改用 GPT-Image-2，或稍后再试'
+  }
+  if (/rate limit|too many requests/i.test(raw)) {
+    return '生图服务繁忙（调用频率超限），请稍等一会儿再试'
+  }
+  if (/resource has been exhausted|check quota|quota/i.test(raw)) {
+    return '该模型额度已用尽，请在管理后台切换其他模型（如 GPT-Image-2）'
+  }
+  if (/safety|blocked|policy/i.test(raw)) {
+    return '内容被模型安全策略拦截，请调整参考图或提示词后重试'
   }
   return raw.length > 180 ? `${raw.slice(0, 180)}…` : raw
 }
@@ -166,16 +205,14 @@ async function startGeneration(
   const isRef = body.mode === 'reference'
   const toolName = isRef ? 'vibra_image_to_image' : 'vibra_text_to_image'
 
+  const settings = getGenerationSettings()
   const args: Record<string, unknown> = {
     prompt: body.prompt,
     saveToCanvas: false,
     waitForResult: false,
     aspectRatio: '1:1',
-    resolution: '1K',
-  }
-
-  if (serverConfig.vibradraftModelId) {
-    args.modelId = serverConfig.vibradraftModelId
+    resolution: settings.resolution,
+    modelId: settings.imageModelId,
   }
 
   if (isRef) {
@@ -197,8 +234,9 @@ async function startGeneration(
 }
 
 async function pollUntilDone(taskId: string): Promise<GenerateImageResult> {
+  // 4s keeps several concurrent tasks under the 60 calls/minute token limit.
   const maxAttempts = 90
-  let interval = 2000
+  let interval = 4000
 
   for (let i = 0; i < maxAttempts; i++) {
     const res = await callTool(
@@ -213,7 +251,7 @@ async function pollUntilDone(taskId: string): Promise<GenerateImageResult> {
     }
 
     if (typeof sc.pollIntervalMs === 'number' && sc.pollIntervalMs > 0) {
-      interval = Math.min(5000, sc.pollIntervalMs)
+      interval = Math.min(8000, Math.max(4000, sc.pollIntervalMs))
     }
 
     const status = String(sc.status || '').toLowerCase()
@@ -318,6 +356,94 @@ export async function generateWithVibradraft(
   }
 
   return images
+}
+
+export interface VibradraftModel {
+  id: string
+  displayName: string
+  type: 'image' | 'video' | string
+  providerName: string
+  status: string
+  supportedModes: string[]
+  supportedResolutions: string[]
+  supportedAspectRatios: string[]
+  supportsCustomSize: boolean
+  /** Diamonds per generation, from vibra_estimate_cost */
+  cost?: number
+  costCny?: number
+}
+
+const MODEL_CACHE_MS = 5 * 60 * 1000
+let modelCache: { at: number; models: VibradraftModel[] } | null = null
+
+async function estimateCost(
+  model: VibradraftModel,
+): Promise<{ cost?: number; costCny?: number }> {
+  try {
+    const sc = getStructured(
+      await callTool(
+        'vibra_estimate_cost',
+        {
+          mode: model.type === 'video' ? 'video' : 'image',
+          modelId: model.id,
+          ...(model.supportedModes.includes('edit') ? { images: ['x'] } : {}),
+        },
+        900,
+      ),
+    )
+    const est = sc?.estimate as
+      | { cost?: string | number; modelInfo?: { actualCostCny?: number } }
+      | undefined
+    const cost = Number(est?.cost)
+    const cny = est?.modelInfo?.actualCostCny
+    return {
+      cost: Number.isFinite(cost) ? cost : undefined,
+      costCny: typeof cny === 'number' ? Math.round(cny * 100) / 100 : undefined,
+    }
+  } catch {
+    return {}
+  }
+}
+
+/** Models available to the configured token, cached briefly. */
+export async function listVibradraftModels(
+  force = false,
+): Promise<VibradraftModel[]> {
+  if (!force && modelCache && Date.now() - modelCache.at < MODEL_CACHE_MS) {
+    return modelCache.models
+  }
+  const sc = getStructured(await callTool('vibra_list_models', {}, 800))
+  const raw = (sc?.models as Array<Record<string, unknown>> | undefined) ?? []
+  const models: VibradraftModel[] = raw.map((m) => {
+    const caps = (m.capabilities ?? {}) as Record<string, unknown>
+    const strList = (v: unknown) =>
+      Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : []
+    return {
+      id: String(m.id),
+      displayName: String(m.displayName || m.id),
+      type: String(m.type || 'image'),
+      providerName: String(m.providerName || m.providerId || ''),
+      status: String(m.status || 'unknown'),
+      supportedModes: strList(m.supportedModes),
+      supportedResolutions: strList(m.supportedResolutions),
+      supportedAspectRatios: strList(m.supportedAspectRatios),
+      supportsCustomSize: Boolean(caps.supportsCustomSize),
+    }
+  })
+  const costs = await Promise.all(models.map(estimateCost))
+  models.forEach((m, i) => Object.assign(m, costs[i]))
+  modelCache = { at: Date.now(), models }
+  return models
+}
+
+export async function getDiamondBalance(): Promise<number | null> {
+  try {
+    const sc = getStructured(await callTool('vibra_get_diamond_balance', {}, 801))
+    const total = (sc?.balance as { total?: number } | undefined)?.total
+    return typeof total === 'number' ? total : null
+  } catch {
+    return null
+  }
 }
 
 /** Lightweight readiness check via tools/list */

@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>AuraStudio SDK Demo（模拟第三方 H5）</title>
+    <style>
+      body { font-family: system-ui, sans-serif; margin: 0; background: #f3f4f6; color: #111; }
+      header { padding: 16px 20px; background: #111; color: #f7f4ef; }
+      main { max-width: 480px; margin: 20px auto; padding: 0 12px 40px; }
+      .card { background: #fff; border-radius: 16px; padding: 16px; box-shadow: 0 8px 24px rgba(0,0,0,.06); }
+      label { display: block; font-size: 12px; color: #666; margin-top: 10px; }
+      input { width: 100%; box-sizing: border-box; margin-top: 4px; padding: 10px 12px; border: 1px solid #ddd; border-radius: 10px; }
+      button { margin-top: 14px; width: 100%; padding: 12px; border: 0; border-radius: 12px; background: #1a1a1a; color: #e8d5a3; font-weight: 600; cursor: pointer; }
+      #log { margin-top: 12px; font-size: 12px; white-space: pre-wrap; color: #444; max-height: 160px; overflow: auto; }
+      #mount { margin-top: 16px; min-height: 640px; background: #fff; border-radius: 16px; overflow: hidden; box-shadow: 0 8px 24px rgba(0,0,0,.06); }
+    </style>
+  </head>
+  <body>
+    <header>
+      <strong>第三方 H5 接入演示</strong>
+      <div style="opacity:.7;font-size:12px;margin-top:4px">
+        在管理后台创建接入应用后填写 AppId / Secret（Secret 生产环境必须放宿主后端）
+      </div>
+    </header>
+    <main>
+      <div class="card">
+        <label>AuraStudio 地址</label>
+        <input id="baseUrl" placeholder="留空则使用当前站点" />
+        <label>AppId</label>
+        <input id="appId" placeholder="app_xxxx" />
+        <label>AppSecret</label>
+        <input id="secret" type="password" placeholder="sk_xxxx" />
+        <label>宿主用户 ID</label>
+        <input id="externalUserId" value="demo-user-001" />
+        <button id="start" type="button">挂载创作台</button>
+        <div id="log"></div>
+      </div>
+      <div id="mount"></div>
+    </main>
+    <script type="module" src="./main.ts"></script>
+  </body>
+</html>

@@ -50,22 +50,43 @@ export interface GenerationParams {
   prompt: string
   count: number
   mode: GenerateMode
-  /** compressed data URLs of reference images */
+  /** compressed data URLs of reference images (A-zone target product only) */
   references: string[]
   /** estimated unique products count from A zone */
   referenceItemsCount?: number
+  /** number of selected A-zone target views used for generation */
+  selectedProductViewCount?: number
   /** detected style type from B zone */
   referenceStyleType?: ImageType
+  /** B-zone style features as text (lighting/tone/composition) */
+  referenceStyleSummary?: string
+  /** User-editable requirement text for the selected image type */
+  typeRequirement?: string
 }
 
-export function isModelImageType(type: ImageType): boolean {
-  return (
-    type === 'model_bracelet_bangle' ||
-    type === 'model_earring' ||
-    type === 'model_necklace_pendant' ||
-    type === 'model_ring' ||
-    type === 'model_set'
-  )
+export type ModelImageType =
+  | 'model_bracelet_bangle'
+  | 'model_earring'
+  | 'model_necklace_pendant'
+  | 'model_ring'
+  | 'model_set'
+
+export const MODEL_IMAGE_TYPES: ModelImageType[] = [
+  'model_necklace_pendant',
+  'model_earring',
+  'model_ring',
+  'model_bracelet_bangle',
+  'model_set',
+]
+
+export function isModelImageType(type: ImageType): type is ModelImageType {
+  return (MODEL_IMAGE_TYPES as ImageType[]).includes(type)
+}
+
+/** Short jewelry name for an outfit sub-type, e.g. 「项链吊坠」 */
+export function outfitShortLabel(type: ModelImageType): string {
+  const label = IMAGE_TYPES.find((t) => t.value === type)?.label ?? ''
+  return label.replace(/^穿搭图-/, '')
 }
 
 export interface ImageTypeOption {
@@ -170,7 +191,7 @@ export const IMAGE_TYPES: ImageTypeOption[] = [
   },
   {
     value: 'model_bracelet_bangle',
-    label: '模特图-手链手镯',
+    label: '穿搭图-手链手镯',
     desc: '手部佩戴 · 手链/手镯细节展示',
     useCase: '适合手部特写、手腕佩戴场景',
     sampleUrl: '/samples/model-bracelet-bangle.png',
@@ -178,7 +199,7 @@ export const IMAGE_TYPES: ImageTypeOption[] = [
   },
   {
     value: 'model_earring',
-    label: '模特图-耳钉耳环',
+    label: '穿搭图-耳钉耳环',
     desc: '耳部佩戴 · 脸部局部与耳饰关系',
     useCase: '适合耳钉、耳环上耳展示',
     sampleUrl: '/samples/model-earring.png',
@@ -186,7 +207,7 @@ export const IMAGE_TYPES: ImageTypeOption[] = [
   },
   {
     value: 'model_necklace_pendant',
-    label: '模特图-项链吊坠',
+    label: '穿搭图-项链吊坠',
     desc: '颈部佩戴 · 锁骨与胸前构图',
     useCase: '适合项链、吊坠上身展示',
     sampleUrl: '/samples/model-necklace-pendant.png',
@@ -194,7 +215,7 @@ export const IMAGE_TYPES: ImageTypeOption[] = [
   },
   {
     value: 'model_ring',
-    label: '模特图-戒指',
+    label: '穿搭图-戒指',
     desc: '手指佩戴 · 戒圈与手部姿态',
     useCase: '适合单戒、叠戴戒指展示',
     sampleUrl: '/samples/model-ring.png',
@@ -202,7 +223,7 @@ export const IMAGE_TYPES: ImageTypeOption[] = [
   },
   {
     value: 'model_set',
-    label: '模特图-首饰套装',
+    label: '穿搭图-首饰套装',
     desc: '多件同框 · 耳饰/项链/戒指协同',
     useCase: '适合套装搭配与成套销售展示',
     sampleUrl: '/samples/model-set.png',
@@ -269,17 +290,51 @@ const IMAGE_TYPE_TEXT: Record<ImageType, string> = {
   product_white:
     '产品白底图：适合电商主图，主体独立展示，无模特无道具，背景干净纯白',
   model_bracelet_bangle:
-    '模特图-手链手镯：真人手腕佩戴展示，突出手链/手镯在手部动作中的质感与比例',
+    '穿搭图-手链手镯：真人手腕佩戴展示，突出手链/手镯在手部动作中的质感与比例',
   model_earring:
-    '模特图-耳钉耳环：真人耳部佩戴展示，突出耳饰与脸部轮廓关系，强调耳部近景质感',
+    '穿搭图-耳钉耳环：真人耳部佩戴展示，突出耳饰与脸部轮廓关系，强调耳部近景质感',
   model_necklace_pendant:
-    '模特图-项链吊坠：真人颈部佩戴展示，突出锁骨线条与吊坠垂坠关系，强调上身效果',
+    '穿搭图-项链吊坠：真人颈部佩戴展示，突出锁骨线条与吊坠垂坠关系，强调上身效果',
   model_ring:
-    '模特图-戒指：真人手指佩戴展示，突出戒圈比例、手部姿态与戒面细节',
+    '穿搭图-戒指：真人手指佩戴展示，突出戒圈比例、手部姿态与戒面细节',
   model_set:
-    '模特图-首饰套装：真人多件套佩戴展示，突出耳饰、项链、戒指/手链的整体搭配与统一风格',
-  atmosphere:
-    '氛围图：品牌情境大片，强调光影、色彩与陈列氛围，营造高端视觉感受',
+    '穿搭图-首饰套装：真人多件套佩戴展示，突出耳饰、项链、戒指/手链的整体搭配与统一风格',
+  atmosphere: '',
+}
+
+export type AtmosphereBackground = 'red' | 'black'
+
+export const ATMOSPHERE_BG_TEXT: Record<AtmosphereBackground, string> = {
+  red: '背景色只用红色：正红至酒红的单一红色系',
+  black: '背景色只用黑色：纯黑至深炭灰的单一黑色系',
+}
+
+function atmosphereRequirement(bg: AtmosphereBackground): string {
+  return [
+    '氛围图：严格参照氛围图样图的画面结构——产品单独居中摆放在一道简洁的弧形台面/弧形地平线上；柔和聚光打亮主体；台面有轻微反光',
+    `${ATMOSPHERE_BG_TEXT[bg]}；仅允许同色系明暗渐变；不得出现其他颜色`,
+    '背景必须极简：严禁添加任何道具与背景物品（如布料、丝绸、花草、石块、柱子、家具、建筑、帷幔、首饰盒、光斑装饰等）',
+    '画面只出现目标产品本身；干净、高级、聚焦主体',
+  ].join('；')
+}
+
+export function defaultTypeRequirement(
+  imageType: ImageType,
+  atmosphereBg: AtmosphereBackground = 'red',
+): string {
+  if (imageType === 'atmosphere') return atmosphereRequirement(atmosphereBg)
+  return IMAGE_TYPE_TEXT[imageType]
+}
+
+/** Swap the background-color sentence inside a (possibly user-edited) requirement */
+export function swapAtmosphereBackground(
+  text: string,
+  bg: AtmosphereBackground,
+): string {
+  const other = bg === 'red' ? 'black' : 'red'
+  return text.includes(ATMOSPHERE_BG_TEXT[other])
+    ? text.replace(ATMOSPHERE_BG_TEXT[other], ATMOSPHERE_BG_TEXT[bg])
+    : text
 }
 
 /** Scenes that make sense under each image type (for optional fine-tune) */
@@ -293,50 +348,67 @@ export const SCENES_BY_IMAGE_TYPE: Record<ImageType, SceneTemplate[]> = {
   atmosphere: ['velvet_box', 'marble', 'editorial', 'macro'],
 }
 
+const SINGLE_FRAME_CLAUSE =
+  '只输出一张完整的单一画面照片（单一场景、单一机位），严禁拼图、多宫格、分屏、上下/左右组合、画中画或多视角拼接'
+
 export function buildPrompt(params: GenerationParams): string {
   if (params.prompt.trim()) {
     return params.prompt.trim()
   }
 
   const imageType = params.imageType ?? 'product_white'
-  const typeClause = IMAGE_TYPE_TEXT[imageType]
-  // Prefer image-type framing; keep scene as secondary nuance when compatible
+  const typeClause =
+    params.typeRequirement?.trim() || defaultTypeRequirement(imageType)
+  // Prefer image-type framing; keep scene as secondary nuance when compatible.
+  // Atmosphere scenery is fully defined by the editable requirement.
   const sceneClause =
     imageType === 'product_white' && params.scene === 'macro'
       ? SCENE_TEXT.macro
       : imageType === 'atmosphere'
-        ? SCENE_TEXT[params.scene]
+        ? ''
         : isModelImageType(imageType)
           ? SCENE_TEXT.lifestyle_hand
           : SCENE_TEXT.white_bg
 
   if (params.mode === 'reference' && params.references.length > 0) {
     const detectedStyle = params.referenceStyleType ?? params.imageType
-    const styleText = IMAGE_TYPE_TEXT[detectedStyle]
+    const styleText = defaultTypeRequirement(detectedStyle)
+    const viewCount =
+      params.selectedProductViewCount ?? params.references.length
     const countText = params.referenceItemsCount
-      ? `A区识别约${params.referenceItemsCount}件商品`
-      : 'A区主体商品按参考图识别'
+      ? `A区识别约${params.referenceItemsCount}件商品，本次仅复刻已锁定的目标商品`
+      : '本次仅复刻A区已锁定的目标商品'
+    const styleSummary =
+      params.referenceStyleSummary?.trim() ||
+      `按B区风格生成：${styleText}`
 
     return [
-      `基于A/B双参考进行图生图重绘（共${params.references.length}张参考图）`,
-      `${countText}，以A区商品为主体`,
-      `按B区风格生成：${styleText}`,
-      '以参考图中的珠宝品类、材质、宝石与佩戴部位为准，不改成其他品类',
-      '保留原款轮廓、镶嵌结构与工艺细节',
+      `基于A区目标商品图进行图生图重绘（${viewCount}张同款多视角参考图仅用于理解产品结构，第一张为主参考）`,
+      SINGLE_FRAME_CLAUSE,
+      countText,
+      styleSummary,
+      '严格保持目标商品身份：品类、轮廓、镶嵌结构、主石数量与形状、爪位、链条、扣头与刻纹不得改变',
+      '禁止增减零件、禁止改成其他珠宝品类或混入其他首饰',
+      'B区仅提供光影/构图/氛围/模特姿势参考，严禁引入B区中出现的任何珠宝款式、logo或可识别产品细节',
       typeClause,
       sceneClause,
       '写实风格，金属反射准确，画面干净，商业级质感，高分辨率',
-      '输出A区同款在B区风格下的商业成图',
-    ].join('，')
+      '输出锁定目标款在指定风格下的商业成图',
+    ]
+      .filter(Boolean)
+      .join('，')
   }
 
   return [
     '珠宝产品摄影：高质感珠宝单品',
+    SINGLE_FRAME_CLAUSE,
     '材质、宝石与款式可按需求细化',
     typeClause,
     sceneClause,
     '写实风格，金属反射准确，画面干净，商业级质感，高分辨率',
-  ].join('，')
+  ]
+    .filter(Boolean)
+    .join('，')
 }
 
 /** Demo placeholder images — jewelry-like Unsplash photos */

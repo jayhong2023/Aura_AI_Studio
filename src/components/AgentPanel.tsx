@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useImperativeHandle, useMemo, useRef, useState, type Ref } from 'react'
 import {
   Download,
   Loader2,
@@ -6,19 +6,20 @@ import {
   Send,
   Sparkles,
   Trash2,
-  Wand2,
   X,
   ZoomIn,
 } from 'lucide-react'
+import { type ReferenceImage } from './ReferenceUploader'
 import {
-  ReferenceUploader,
-  type ReferenceImage,
-} from './ReferenceUploader'
-import {
+  ackJobViaApi,
+  artworksFromJob,
   downloadImageViaApi,
-  generateViaApi,
+  listPendingJobsViaApi,
   revisePromptViaApi,
+  startGenerationJob,
+  waitForJob,
   type ApiStatus,
+  type GenerationJob,
 } from '../lib/api'
 import {
   buildPrompt,
@@ -39,85 +40,134 @@ export interface AgentMessage {
   createdAt: number
 }
 
+export interface AgentPanelHandle {
+  generate: () => Promise<void>
+}
+
 interface AgentPanelProps {
-  isMobilePreview?: boolean
+  ref?: Ref<AgentPanelHandle>
   params: GenerationParams
   productRefs: ReferenceImage[]
   styleRefs: ReferenceImage[]
-  onProductRefsChange: (images: ReferenceImage[]) => void
-  onStyleRefsChange: (images: ReferenceImage[]) => void
+  selectedProductRefIds: string[]
   lockTargetType: boolean
   detectedProductCount: number
   detectedStyleType: ImageType
+  styleSummary: string
   onPromptChange: (prompt: string) => void
   onGenerated: (artworks: Artwork[]) => void
   onTaskLogged: (task: TaskHistoryInput) => void
+  onBusyChange?: (busy: boolean) => void
+  onActiveCountChange?: (count: number) => void
   apiStatus: ApiStatus | null
   seedPrompt: string
 }
 
-const QUICK_CHIPS = [
-  '换成产品白底图',
-  '改成模特图-耳钉耳环',
-  '改成模特图-项链吊坠',
-  '做成氛围大片',
-  '换成玫瑰金',
-  '宝石换成钻石',
-  '更亮一点',
-]
+export const MAX_CONCURRENT_JOBS = 4
+
+const QUICK_CHIPS = ['背景更简洁', '光线更亮一点', '加强金属质感', '换成玫瑰金']
+
+const MAX_TARGET_VIEWS = 5
+
+const WELCOME =
+  '左侧上传产品图、选好类型后点「生成图片」。出图后可以在下方直接说怎么改，例如「背景更简洁」。'
 
 export function AgentPanel({
-  isMobilePreview = false,
+  ref,
   params,
   productRefs,
   styleRefs,
-  onProductRefsChange,
-  onStyleRefsChange,
+  selectedProductRefIds,
   lockTargetType,
   detectedProductCount,
   detectedStyleType,
+  styleSummary,
   onPromptChange,
   onGenerated,
   onTaskLogged,
+  onBusyChange,
+  onActiveCountChange,
   apiStatus,
   seedPrompt,
 }: AgentPanelProps) {
   const [input, setInput] = useState('')
-  const [busy, setBusy] = useState(false)
+  /** Number of in-flight generation jobs (server-backed, can run in parallel) */
+  const [activeCount, setActiveCount] = useState(0)
+  const activeCountRef = useRef(0)
   const [progress, setProgress] = useState(0)
+  const progressByJobRef = useRef(new Map<string, number>())
   const [error, setError] = useState<string | null>(null)
-  const [showPrompt, setShowPrompt] = useState(false)
+  const busy = activeCount > 0
+  const atCapacity = activeCount >= MAX_CONCURRENT_JOBS
+
+  const bumpActive = (delta: number) => {
+    activeCountRef.current = Math.max(0, activeCountRef.current + delta)
+    setActiveCount(activeCountRef.current)
+  }
+
+  const reportProgress = (jobId: string, pct: number) => {
+    progressByJobRef.current.set(jobId, pct)
+    let max = 0
+    for (const v of progressByJobRef.current.values()) max = Math.max(max, v)
+    setProgress(max)
+  }
+
+  const clearJobProgress = (jobId: string) => {
+    progressByJobRef.current.delete(jobId)
+    if (progressByJobRef.current.size === 0) setProgress(0)
+    else {
+      let max = 0
+      for (const v of progressByJobRef.current.values()) max = Math.max(max, v)
+      setProgress(max)
+    }
+  }
   const [messages, setMessages] = useState<AgentMessage[]>(() => [
-    {
-      id: 'welcome',
-      role: 'system',
-      content:
-        'Agent 模式：用自然语言描述想要的调整，我会修订提示词并重新生成。例如「换成玫瑰金」「改成手部佩戴」「更亮一点」。',
-      createdAt: Date.now(),
-    },
+    { id: 'welcome', role: 'system', content: WELCOME, createdAt: Date.now() },
   ])
   const [workingPrompt, setWorkingPrompt] = useState(seedPrompt)
-  const bottomRef = useRef<HTMLDivElement>(null)
-  const productRefUrls = useMemo(
-    () => productRefs.slice(0, 3).map((r) => r.dataUrl),
+  const listRef = useRef<HTMLDivElement>(null)
+
+  const selectedProductRefs = useMemo(() => {
+    const byId = new Map(productRefs.map((r) => [r.id, r]))
+    return selectedProductRefIds
+      .map((id) => byId.get(id))
+      .filter((r): r is ReferenceImage => Boolean(r))
+      .slice(0, MAX_TARGET_VIEWS)
+  }, [productRefs, selectedProductRefIds])
+
+  // Only A-zone selected targets enter generation images
+  const refsForGeneration = useMemo(
+    () => selectedProductRefs.map((r) => r.dataUrl),
+    [selectedProductRefs],
+  )
+  const allProductRefUrls = useMemo(
+    () => productRefs.map((r) => r.dataUrl),
     [productRefs],
   )
   const styleRefUrls = useMemo(
-    () => styleRefs.slice(0, 2).map((r) => r.dataUrl),
+    () => styleRefs.map((r) => r.dataUrl),
     [styleRefs],
   )
-  const refsForGeneration = useMemo(
-    () => [...productRefUrls, ...styleRefUrls],
-    [productRefUrls, styleRefUrls],
-  )
+  const hasResult = messages.some((m) => m.artworks && m.artworks.length > 0)
+  const typeLabel =
+    IMAGE_TYPES.find((t) => t.value === params.imageType)?.label ?? '图片'
 
   useEffect(() => {
     setWorkingPrompt(seedPrompt)
   }, [seedPrompt])
 
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
+    const list = listRef.current
+    if (list) list.scrollTo({ top: list.scrollHeight, behavior: 'smooth' })
   }, [messages, busy])
+
+  useEffect(() => {
+    onBusyChange?.(busy)
+  }, [busy, onBusyChange])
+
+  useEffect(() => {
+    onActiveCountChange?.(activeCount)
+  }, [activeCount, onActiveCountChange])
 
   const push = (msg: Omit<AgentMessage, 'id' | 'createdAt'>) => {
     setMessages((prev) => [
@@ -126,173 +176,254 @@ export function AgentPanel({
     ])
   }
 
-  const runTurn = async (instruction: string) => {
-    if (busy || !instruction.trim()) return
+  const basePrompt = () =>
+    workingPrompt.trim() ||
+    buildPrompt({
+      ...params,
+      references: refsForGeneration,
+      referenceItemsCount: detectedProductCount || undefined,
+      selectedProductViewCount: selectedProductRefs.length || undefined,
+      referenceStyleType: detectedStyleType,
+      referenceStyleSummary: styleSummary,
+    })
 
-    if (params.mode === 'reference' && productRefs.length === 0) {
-      setError('参考图模式下请先在A区上传至少一张产品图')
+  const execute = async (
+    userText: string,
+    source: 'guide' | 'agent',
+    preparePrompt: () => Promise<string>,
+  ) => {
+    if (activeCountRef.current >= MAX_CONCURRENT_JOBS) {
+      setError(`最多同时进行 ${MAX_CONCURRENT_JOBS} 个生成任务，请等其中一个完成`)
       return
     }
-    if (params.mode === 'reference' && styleRefs.length === 0) {
-      setError('参考图模式下请先在B区上传至少一张风格图')
+    if (productRefs.length === 0) {
+      setError('请先在左侧上传产品图')
+      return
+    }
+    if (selectedProductRefs.length === 0) {
+      setError('请在左侧点选至少一张要生成的产品图')
       return
     }
 
     setError(null)
-    setBusy(true)
-    setProgress(0)
+    bumpActive(1)
     const startedAt = Date.now()
-    push({ role: 'user', content: instruction.trim() })
+    const count = source === 'agent' ? Math.min(params.count, 2) : params.count
+    const taskBase = {
+      source,
+      mode: params.mode,
+      imageType: params.imageType,
+      countRequested: count,
+      productRefUrls: allProductRefUrls,
+      styleRefUrls,
+      selectedProductRefIds: selectedProductRefIds.slice(0, MAX_TARGET_VIEWS),
+    }
+    push({ role: 'user', content: userText })
 
+    let prompt = workingPrompt
+    let jobId: string | null = null
     try {
-      const base =
-        workingPrompt.trim() ||
-        buildPrompt({
-          ...params,
-          references: refsForGeneration,
-          referenceItemsCount: detectedProductCount || undefined,
-          referenceStyleType: detectedStyleType,
+      prompt = await preparePrompt()
+      const genParams: GenerationParams = {
+        ...params,
+        prompt,
+        references: refsForGeneration,
+        referenceItemsCount: detectedProductCount || undefined,
+        selectedProductViewCount: selectedProductRefs.length || undefined,
+        referenceStyleType: detectedStyleType,
+        referenceStyleSummary: styleSummary,
+        count,
+      }
+      const { references: _references, ...contextParams } = genParams
+      const job = await startGenerationJob(genParams, prompt, {
+        userText,
+        source,
+        params: contextParams,
+        startedAt,
+        selectedProductRefIds: taskBase.selectedProductRefIds,
+      })
+      jobId = job.id
+      if (activeCountRef.current > 1) {
+        push({
+          role: 'system',
+          content: `已提交第 ${activeCountRef.current} 个并行任务，可继续等待或再提交`,
         })
+      }
+      const done = await waitForJob(job.id, startedAt, (pct) =>
+        reportProgress(job.id, pct),
+      )
+      await finishJob(done, {
+        productRefUrls: allProductRefUrls,
+        styleRefUrls,
+      })
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : '生成失败'
+      if (jobId) {
+        setError(msg)
+        push({
+          role: 'assistant',
+          content: `${msg}。任务仍在服务端处理，完成后刷新页面即可看到结果。`,
+        })
+      } else {
+        setError(
+          apiStatus
+            ? msg
+            : '无法连接 API 服务。请用 npm run dev 同时启动前端与后端。',
+        )
+        onTaskLogged({
+          ...taskBase,
+          status: 'failed',
+          prompt,
+          provider: apiStatus?.provider,
+          countCompleted: 0,
+          durationMs: Date.now() - startedAt,
+          previewUrls: [],
+        })
+        push({ role: 'assistant', content: `失败：${msg}` })
+      }
+    } finally {
+      if (jobId) clearJobProgress(jobId)
+      bumpActive(-1)
+    }
+  }
 
+  /**
+   * Shows a finished job in the chat. Gallery/history are only written by the
+   * tab that wins the server-side acknowledgement, so results never duplicate.
+   */
+  const finishJob = async (
+    job: GenerationJob,
+    refs: { productRefUrls: string[]; styleRefUrls: string[] },
+  ) => {
+    const ctx = job.context
+    const claimed = await ackJobViaApi(job.id).catch(() => false)
+    const prompt = job.result?.prompt ?? ctx?.params.prompt ?? ''
+    const startedAt = ctx?.startedAt ?? job.createdAt
+    const taskBase = {
+      source: ctx?.source ?? ('guide' as const),
+      mode: ctx?.params.mode ?? params.mode,
+      imageType: ctx?.params.imageType ?? params.imageType,
+      countRequested: ctx?.params.count ?? 1,
+      selectedProductRefIds: ctx?.selectedProductRefIds ?? [],
+      durationMs: Math.max(0, job.updatedAt - startedAt),
+      prompt,
+      ...refs,
+    }
+
+    if (job.status === 'success') {
+      const artworks = artworksFromJob(job)
+      if (claimed) {
+        onGenerated(artworks)
+        onTaskLogged({
+          ...taskBase,
+          status: 'success',
+          provider: artworks[0]?.provider,
+          model: artworks[0]?.model,
+          countCompleted: artworks.length,
+          previewUrls: artworks.map((a) => a.url).slice(0, 4),
+        })
+      }
+      push({
+        role: 'assistant',
+        content: `已生成 ${artworks.length} 张。不满意可以直接说怎么改。`,
+        artworks,
+        model: artworks[0]?.model,
+        prompt,
+      })
+      return
+    }
+
+    const msg = job.error ?? '生成失败'
+    setError(msg)
+    if (claimed) {
+      onTaskLogged({
+        ...taskBase,
+        status: 'failed',
+        provider: apiStatus?.provider,
+        countCompleted: 0,
+        previewUrls: [],
+      })
+    }
+    push({ role: 'assistant', content: `失败：${msg}` })
+  }
+
+  const resumedRef = useRef(false)
+  useEffect(() => {
+    if (resumedRef.current) return
+    resumedRef.current = true
+    void (async () => {
+      const jobs = await listPendingJobsViaApi().catch(() => [])
+      if (jobs.length === 0) return
+      push({
+        role: 'system',
+        content: `已恢复 ${jobs.length} 个未确认的生成任务…`,
+      })
+      await Promise.allSettled(
+        jobs.map(async (job) => {
+          bumpActive(1)
+          try {
+            push({ role: 'user', content: job.context?.userText ?? '生成任务' })
+            const done =
+              job.status === 'running'
+                ? await waitForJob(
+                    job.id,
+                    job.context?.startedAt ?? job.createdAt,
+                    (pct) => reportProgress(job.id, pct),
+                  )
+                : job
+            await finishJob(done, { productRefUrls: [], styleRefUrls: [] })
+          } catch (e) {
+            setError(e instanceof Error ? e.message : '恢复任务失败')
+          } finally {
+            clearJobProgress(job.id)
+            bumpActive(-1)
+          }
+        }),
+      )
+    })()
+  }, [])
+
+  const generate = () =>
+    execute(`生成 ${params.count} 张「${typeLabel}」`, 'guide', async () =>
+      basePrompt(),
+    )
+
+  useImperativeHandle(ref, () => ({ generate }))
+
+  const runTurn = (instruction: string) => {
+    const text = instruction.trim()
+    if (!text) return
+    setInput('')
+    void execute(text, 'agent', async () => {
       const { revisedPrompt, summary } = await revisePromptViaApi(
-        base,
-        instruction,
+        basePrompt(),
+        text,
         undefined,
         lockTargetType ? params.imageType : undefined,
       )
       setWorkingPrompt(revisedPrompt)
       onPromptChange(revisedPrompt)
-
-      push({
-        role: 'assistant',
-        content: `${summary}\n\n将使用以下提示词重新生成：`,
-        prompt: revisedPrompt,
-      })
-
-      const artworks = await generateViaApi(
-        {
-          ...params,
-          prompt: revisedPrompt,
-          references: refsForGeneration,
-          referenceItemsCount: detectedProductCount || undefined,
-          referenceStyleType: detectedStyleType,
-          count: Math.min(params.count, 2),
-        },
-        setProgress,
-        revisedPrompt,
-      )
-
-      onGenerated(artworks)
-      onTaskLogged({
-        status: 'success',
-        source: 'agent',
-        mode: params.mode,
-        imageType: params.imageType,
-        prompt: revisedPrompt,
-        provider: artworks[0]?.provider,
-        model: artworks[0]?.model,
-        countRequested: Math.min(params.count, 2),
-        countCompleted: artworks.length,
-        durationMs: Date.now() - startedAt,
-        productRefUrls,
-        styleRefUrls,
-        previewUrls: artworks.map((a) => a.url).slice(0, 4),
-      })
-      push({
-        role: 'assistant',
-        content: `已生成 ${artworks.length} 张。可继续说「再暗一点」「换成蓝宝石」等继续调整。`,
-        artworks,
-        model: artworks[0]?.model,
-        prompt: revisedPrompt,
-      })
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : '调整失败'
-      setError(
-        apiStatus
-          ? msg
-          : '无法连接 API 服务。请用 npm run dev 同时启动前端与后端。',
-      )
-      onTaskLogged({
-        status: 'failed',
-        source: 'agent',
-        mode: params.mode,
-        imageType: params.imageType,
-        prompt: workingPrompt,
-        provider: apiStatus?.provider,
-        countRequested: Math.min(params.count, 2),
-        countCompleted: 0,
-        durationMs: Date.now() - startedAt,
-        productRefUrls,
-        styleRefUrls,
-        previewUrls: [],
-      })
-      push({ role: 'assistant', content: `失败：${msg}` })
-    } finally {
-      setBusy(false)
-      setProgress(0)
-      setInput('')
-    }
+      push({ role: 'assistant', content: summary })
+      return revisedPrompt
+    })
   }
 
   const clearChat = () => {
     setMessages([
-      {
-        id: 'welcome',
-        role: 'system',
-        content: '对话已清空。可以说「换成玫瑰金」或「改成白底主图」开始新一轮调整。',
-        createdAt: Date.now(),
-      },
+      { id: 'welcome', role: 'system', content: WELCOME, createdAt: Date.now() },
     ])
     setError(null)
   }
 
   return (
-    <div className="flex h-full min-h-[480px] flex-col gap-3 lg:min-h-[560px] lg:gap-4">
-      {params.mode === 'reference' && (
-        <div className="space-y-3">
-          <div
-            className={`grid gap-3 ${
-              isMobilePreview ? 'grid-cols-1' : 'grid-cols-1 md:grid-cols-2'
-            }`}
-          >
-            <ReferenceUploader
-              label="A区 · 产品主体"
-              emptyHint="上传产品实拍 / CAD（可多商品）"
-              images={productRefs}
-              onChange={onProductRefsChange}
-              maxCount={10}
-            />
-            <ReferenceUploader
-              label="B区 · 风格模板"
-              emptyHint="上传模特图 / 白底图 / 氛围图"
-              images={styleRefs}
-              onChange={onStyleRefsChange}
-              maxCount={6}
-            />
-          </div>
-          <div className="rounded-2xl border border-cream-dark bg-mist/70 px-3 py-2 text-xs leading-relaxed text-stone">
-            识别结果：A区约 {detectedProductCount || 0} 件商品 · B区风格为
-            {IMAGE_TYPES.find((t) => t.value === detectedStyleType)?.label}
-            。生成时优先使用 A区前3张 + B区前2张。
-          </div>
-        </div>
-      )}
-
+    <div className="flex h-full min-h-[480px] flex-col lg:min-h-[560px]">
       <div className="flex flex-1 flex-col overflow-hidden rounded-3xl border border-cream-dark bg-white/70">
         <div className="flex items-center justify-between gap-2 border-b border-cream-dark/70 px-4 py-2.5">
           <div className="flex items-center gap-2 text-sm font-medium text-ink">
             <MessageSquare className="h-4 w-4 text-champagne-dark" />
-            对话调图
+            生成结果
           </div>
-          <div className="flex items-center gap-1">
-            <button
-              type="button"
-              onClick={() => setShowPrompt((v) => !v)}
-              className="flex items-center gap-1 rounded-lg px-2 py-1 text-xs text-stone hover:bg-mist hover:text-ink"
-            >
-              <Wand2 className="h-3 w-3" />
-              {showPrompt ? '隐藏提示词' : '当前提示词'}
-            </button>
+          {messages.length > 1 && (
             <button
               type="button"
               onClick={clearChat}
@@ -301,55 +432,54 @@ export function AgentPanel({
               <Trash2 className="h-3 w-3" />
               清空
             </button>
-          </div>
+          )}
         </div>
 
-        {showPrompt && (
-          <div className="border-b border-cream-dark/70 bg-mist/50 px-4 py-2.5">
-            <p className="mb-1 text-[11px] font-medium tracking-wider text-stone uppercase">
-              当前工作提示词
-            </p>
-            <p className="max-h-24 overflow-y-auto font-display text-sm leading-relaxed text-ink-soft italic">
-              {workingPrompt || '（尚未生成，将根据左侧参数自动构建）'}
-            </p>
-          </div>
-        )}
-
-        <div className="flex-1 space-y-3 overflow-y-auto px-3 py-3 sm:px-4">
+        <div
+          ref={listRef}
+          className="flex-1 space-y-3 overflow-y-auto px-3 py-3 sm:px-4"
+        >
           {messages.map((m) => (
             <MessageBubble key={m.id} message={m} />
           ))}
           {busy && (
-            <div className="flex items-center gap-2 text-xs text-stone">
-              <Loader2 className="h-3.5 w-3.5 animate-spin" />
-              正在修订并生成… {progress}%
+            <div className="space-y-2 rounded-xl border border-champagne/25 bg-champagne/5 px-3 py-2.5">
+              <div className="flex items-center gap-2 text-xs text-ink-soft">
+                <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-champagne-dark" />
+                {activeCount > 1
+                  ? `${activeCount} 个任务生成中… ${progress}%`
+                  : `正在生成… ${progress}%`}
+              </div>
+              {!atCapacity && (
+                <button
+                  type="button"
+                  onClick={() => void generate()}
+                  className="flex w-full items-center justify-center gap-1.5 rounded-lg border border-ink/80 bg-ink px-3 py-2 text-xs font-semibold text-cream"
+                >
+                  <Sparkles className="h-3.5 w-3.5 text-champagne" />
+                  用左侧当前设置再生成一批
+                </button>
+              )}
             </div>
           )}
-          <div ref={bottomRef} />
         </div>
 
         <div className="space-y-2 border-t border-cream-dark/70 p-3">
-          {lockTargetType && (
-            <p className="rounded-lg bg-champagne/10 px-3 py-1.5 text-[11px] text-champagne-dark">
-              已锁定目标类型「
-              {IMAGE_TYPES.find((t) => t.value === params.imageType)?.label}
-              」，Agent 每轮将固定按此类型生成。
-            </p>
+          {hasResult && (
+            <div className="flex flex-wrap gap-1.5">
+              {QUICK_CHIPS.map((chip) => (
+                <button
+                  key={chip}
+                  type="button"
+                  disabled={atCapacity}
+                  onClick={() => runTurn(chip)}
+                  className="rounded-full border border-cream-dark bg-cream px-2.5 py-1 text-xs text-ink-soft transition-colors hover:border-champagne/50 hover:text-ink disabled:opacity-50"
+                >
+                  {chip}
+                </button>
+              ))}
+            </div>
           )}
-
-          <div className="flex flex-wrap gap-1.5">
-            {QUICK_CHIPS.map((chip) => (
-              <button
-                key={chip}
-                type="button"
-                disabled={busy}
-                onClick={() => void runTurn(chip)}
-                className="rounded-full border border-cream-dark bg-cream px-2.5 py-1 text-xs text-ink-soft transition-colors hover:border-champagne/50 hover:text-ink disabled:opacity-50"
-              >
-                {chip}
-              </button>
-            ))}
-          </div>
           {error && (
             <p className="rounded-lg bg-red-50 px-3 py-2 text-xs text-red-600">
               {error}
@@ -359,26 +489,26 @@ export function AgentPanel({
             className="flex gap-2"
             onSubmit={(e) => {
               e.preventDefault()
-              void runTurn(input)
+              runTurn(input)
             }}
           >
             <input
               value={input}
               onChange={(e) => setInput(e.target.value)}
-              disabled={busy}
-              placeholder="描述想怎么改，例如：换成蓝宝石，背景改白底…"
+              disabled={atCapacity}
+              placeholder={
+                hasResult
+                  ? '说说怎么改，例如：背景改成浅灰，光线更柔和'
+                  : '也可以直接描述想要的效果并发送'
+              }
               className="min-h-11 min-w-0 flex-1 rounded-xl border border-cream-dark bg-cream px-3 py-2.5 text-sm text-ink outline-none placeholder:text-stone/60 focus:border-champagne disabled:opacity-60"
             />
             <button
               type="submit"
-              disabled={busy || !input.trim()}
-              className="min-h-11 shrink-0 rounded-xl bg-ink px-4 py-2.5 text-sm font-semibold text-cream disabled:opacity-50"
+              disabled={atCapacity || !input.trim()}
+              className="flex min-h-11 shrink-0 items-center gap-1.5 rounded-xl bg-ink px-4 py-2.5 text-sm font-semibold text-cream disabled:opacity-50"
             >
-              {busy ? (
-                <Loader2 className="h-4 w-4 animate-spin" />
-              ) : (
-                <Send className="h-4 w-4 text-champagne" />
-              )}
+              <Send className="h-4 w-4 text-champagne" />
               发送
             </button>
           </form>

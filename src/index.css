@@ -122,3 +122,20 @@ body {
   background: linear-gradient(180deg, rgba(255, 255, 255, 0.95), rgba(240, 235, 227, 0.82));
   border: 1px solid rgba(168, 139, 61, 0.28);
 }
+
+.form-input {
+  min-height: 2.5rem;
+  width: 100%;
+  border: 1px solid var(--color-cream-dark);
+  border-radius: 0.65rem;
+  background: white;
+  padding: 0.45rem 0.65rem;
+  color: var(--color-ink);
+  font: inherit;
+  font-size: 0.7rem;
+  outline: none;
+}
+
+.form-input:focus {
+  border-color: var(--color-champagne);
+}

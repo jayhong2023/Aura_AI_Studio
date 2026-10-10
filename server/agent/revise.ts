@@ -10,15 +10,15 @@ const MODEL_TYPE_SCENE_TEXT: Record<
   string
 > = {
   model_bracelet_bangle:
-    '模特图-手链手镯：真人手腕佩戴展示，突出手链/手镯在手部动作中的质感与比例，构图聚焦手部与腕部',
+    '穿搭图-手链手镯：真人手腕佩戴展示，突出手链/手镯在手部动作中的质感与比例，构图聚焦手部与腕部',
   model_earring:
-    '模特图-耳钉耳环：真人耳部佩戴展示，突出耳饰与脸部轮廓关系，构图聚焦耳部近景',
+    '穿搭图-耳钉耳环：真人耳部佩戴展示，突出耳饰与脸部轮廓关系，构图聚焦耳部近景',
   model_necklace_pendant:
-    '模特图-项链吊坠：真人颈部佩戴展示，突出锁骨线条与吊坠垂坠关系，构图聚焦颈部上身',
+    '穿搭图-项链吊坠：真人颈部佩戴展示，突出锁骨线条与吊坠垂坠关系，构图聚焦颈部上身',
   model_ring:
-    '模特图-戒指：真人手指佩戴展示，突出戒圈比例与手部姿态，构图聚焦手指近景',
+    '穿搭图-戒指：真人手指佩戴展示，突出戒圈比例与手部姿态，构图聚焦手指近景',
   model_set:
-    '模特图-首饰套装：真人多件套佩戴展示，耳饰、项链、戒指/手链整体搭配，构图兼顾整体与重点细节',
+    '穿搭图-首饰套装：真人多件套佩戴展示，耳饰、项链、戒指/手链整体搭配，构图兼顾整体与重点细节',
 }
 
 /**
@@ -203,25 +203,9 @@ export function revisePrompt(req: AgentReviseRequest): AgentReviseResponse {
   }
 
   const imageType = detectPrimaryImageTypeIntent(instruction)
-  if (imageType && isModelImageType(imageType)) {
-    prompt = replaceScene(prompt, MODEL_TYPE_SCENE_TEXT[imageType])
-    prompt = appendClauseIfMissing(prompt, '禁止生成白底静物图或纯产品陈列图')
+  if (imageType && !req.targetImageType) {
+    prompt = applyLockedImageType(prompt, imageType)
     notes.push(`严格按${imageTypeLabel(imageType)}生成`)
-    matched = true
-  } else if (imageType === 'product_white') {
-    prompt = replaceScene(
-      prompt,
-      '产品白底图：适合电商主图，主体独立展示，无模特无道具，背景干净纯白，柔光箱布光',
-    )
-    prompt = appendClauseIfMissing(prompt, '禁止加入人物模特与复杂场景')
-    notes.push('严格按产品白底图生成')
-    matched = true
-  } else if (imageType === 'atmosphere') {
-    prompt = replaceScene(
-      prompt,
-      '氛围图：品牌情境大片，强调戏剧光影、色彩层次与陈列氛围，画面高级且有故事感',
-    )
-    notes.push('严格按氛围图生成')
     matched = true
   }
 
@@ -245,7 +229,19 @@ export function revisePrompt(req: AgentReviseRequest): AgentReviseResponse {
     prompt = appendClauseIfMissing(prompt, `必须满足：${refined}`)
   }
 
-  if (!/保留原款轮廓|工艺细节/.test(prompt)) {
+  // Soft lighting / scene tweaks must never rewrite product identity
+  if (!/改成其他品类|换款|换新款|改变款式/.test(instruction)) {
+    prompt = appendClauseIfMissing(
+      prompt,
+      '严格保持A区锁定目标商品身份：品类、轮廓、镶嵌结构、主石数量与形状、爪位、链条、扣头与刻纹不得改变',
+    )
+    prompt = appendClauseIfMissing(
+      prompt,
+      '禁止引入B区或其他参考图中的珠宝款式',
+    )
+  }
+
+  if (!/保留原款轮廓|工艺细节|目标商品身份/.test(prompt)) {
     prompt = appendClause(
       prompt,
       '保留原款轮廓、镶嵌结构与工艺细节',
@@ -279,11 +275,33 @@ function replaceStone(prompt: string, stone: string): string {
   return appendClause(prompt, `主石为${stone}`)
 }
 
+const TYPE_CLAUSE_PATTERNS = [
+  /产品白底图：[^，]*(?:，[^，]+){0,6}/,
+  /(?:模特图|穿搭图)(?:-[^，,]+)?：[^，]*(?:，[^，]+){0,6}/,
+  /氛围图：[^，]*(?:，[^，]+){0,6}/,
+]
+
+const ATMOSPHERE_TEXT =
+  '氛围图：严格参照氛围图样图——产品单独居中摆放在简洁的弧形台面上；背景只用红色或黑色单一色系（按产品配色选更衬托主体的一种）；严禁添加任何道具与背景物品；画面极简只突出产品'
+
+/**
+ * Switches the image-type clause. If the prompt already carries a clause for
+ * the same type (possibly user-edited in the UI), it is kept verbatim.
+ */
+function setTypeClause(
+  prompt: string,
+  type: TargetImageType,
+  clause: string,
+): string {
+  if (prompt.includes(`${imageTypeLabel(type)}：`)) return prompt
+  for (const p of TYPE_CLAUSE_PATTERNS) {
+    if (p.test(prompt)) return prompt.replace(p, clause)
+  }
+  return appendClause(prompt, clause)
+}
+
 function replaceScene(prompt: string, scene: string): string {
   const patterns = [
-    /产品白底图：[^，]*(?:，[^，]+){0,6}/,
-    /模特图(?:-[^，,]+)?：[^，]*(?:，[^，]+){0,6}/,
-    /氛围图：[^，]*(?:，[^，]+){0,6}/,
     /纯白无缝背景[^，]*(?:，[^，]+){0,4}/,
     /真人手部佩戴展示[^，]*(?:，[^，]+){0,4}/,
     /丝绒首饰盒陈列[^，]*(?:，[^，]+){0,4}/,
@@ -391,6 +409,7 @@ function detectPrimaryImageTypeIntent(
       type: 'model_necklace_pendant',
       index: Math.max(
         normalized.lastIndexOf('模特'),
+        normalized.lastIndexOf('穿搭'),
         normalized.lastIndexOf('佩戴'),
         normalized.lastIndexOf('model wear'),
         normalized.lastIndexOf('worn on'),
@@ -418,33 +437,33 @@ function applyLockedImageType(
   type: TargetImageType,
 ): string {
   if (isModelImageType(type)) {
-    let next = replaceScene(prompt, MODEL_TYPE_SCENE_TEXT[type])
-    next = appendClauseIfMissing(next, '禁止生成白底静物图或纯产品陈列图')
-    return next
+    const next = setTypeClause(
+      prompt,
+      type,
+      MODEL_TYPE_SCENE_TEXT[type as keyof typeof MODEL_TYPE_SCENE_TEXT],
+    )
+    return appendClauseIfMissing(next, '禁止生成白底静物图或纯产品陈列图')
   }
 
   if (type === 'product_white') {
-    let next = replaceScene(
+    const next = setTypeClause(
       prompt,
+      type,
       '产品白底图：适合电商主图，主体独立展示，无模特无道具，背景干净纯白，柔光箱布光',
     )
-    next = appendClauseIfMissing(next, '禁止加入人物模特与复杂场景')
-    return next
+    return appendClauseIfMissing(next, '禁止加入人物模特与复杂场景')
   }
 
-  return replaceScene(
-    prompt,
-    '氛围图：品牌情境大片，强调戏剧光影、色彩层次与陈列氛围，画面高级且有故事感',
-  )
+  return setTypeClause(prompt, type, ATMOSPHERE_TEXT)
 }
 
 function imageTypeLabel(type: TargetImageType): string {
   if (type === 'product_white') return '产品白底图'
-  if (type === 'model_bracelet_bangle') return '模特图-手链手镯'
-  if (type === 'model_earring') return '模特图-耳钉耳环'
-  if (type === 'model_necklace_pendant') return '模特图-项链吊坠'
-  if (type === 'model_ring') return '模特图-戒指'
-  if (type === 'model_set') return '模特图-首饰套装'
+  if (type === 'model_bracelet_bangle') return '穿搭图-手链手镯'
+  if (type === 'model_earring') return '穿搭图-耳钉耳环'
+  if (type === 'model_necklace_pendant') return '穿搭图-项链吊坠'
+  if (type === 'model_ring') return '穿搭图-戒指'
+  if (type === 'model_set') return '穿搭图-首饰套装'
   return '氛围图'
 }
 

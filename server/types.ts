@@ -1,4 +1,37 @@
 export type GenerateMode = 'text' | 'reference'
+export type UserRole = 'admin' | 'user'
+
+export interface AuthUser {
+  id: string
+  username: string
+  displayName: string
+  role: UserRole
+  disabled: boolean
+  mustChangePassword: boolean
+  createdAt: number
+  updatedAt: number
+  lastLoginAt?: number
+  /** Present when this is a shadow user created by an embed app */
+  appId?: string
+  externalId?: string
+}
+
+export interface EmbedAppInfo {
+  id: string
+  name: string
+  allowedOrigins: string[]
+  webhookUrl: string | null
+  dailyImageQuota: number
+  status: 'active' | 'disabled'
+}
+
+export interface AuthVariables {
+  authUser: AuthUser
+  authSessionId: string
+  /** Set when the session was issued via embed ticket exchange */
+  authApp?: EmbedAppInfo
+  sessionKind?: 'cookie' | 'embed'
+}
 
 export interface GenerateRequestBody {
   mode: GenerateMode
@@ -44,6 +77,8 @@ export interface StatusResponse {
   provider: string
   ready: boolean
   message: string
+  /** Admin-selected image model, applied to every generation */
+  model?: { id: string; name: string; resolution: string }
 }
 
 export interface AgentReviseRequest {

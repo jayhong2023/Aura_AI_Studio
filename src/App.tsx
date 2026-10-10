@@ -3,12 +3,19 @@ import { Header, type Tab, type ViewMode } from './components/Header'
 import { Studio } from './components/Studio'
 import { Gallery } from './components/Gallery'
 import { TaskHistory } from './components/TaskHistory'
+import { LoginPage } from './components/LoginPage'
+import { ChangePasswordModal } from './components/ChangePasswordModal'
 import { fetchApiStatus, type ApiStatus } from './lib/api'
+import { useAuth } from './lib/useAuth'
 import { useGallery } from './lib/useGallery'
 import { useTaskHistory } from './lib/useTaskHistory'
+import { Gem, Loader2 } from 'lucide-react'
 
 export default function App() {
+  const { user, loading, login, logout, changePassword } = useAuth()
   const [tab, setTab] = useState<Tab>('studio')
+  const [showChangePassword, setShowChangePassword] = useState(false)
+  const [studioBusy, setStudioBusy] = useState(false)
   const [viewMode, setViewMode] = useState<ViewMode>(() => {
     try {
       const saved = localStorage.getItem('aurastudio_view_mode')
@@ -18,15 +25,19 @@ export default function App() {
     }
   })
   const [apiStatus, setApiStatus] = useState<ApiStatus | null>(null)
-  const { items, add, toggleFavorite, remove, clear } = useGallery()
+  const { items, add, toggleFavorite, remove, clear } = useGallery(user?.id)
   const {
     items: taskItems,
     add: addTask,
     remove: removeTask,
     clear: clearTasks,
-  } = useTaskHistory()
+  } = useTaskHistory(user?.id)
 
   useEffect(() => {
+    if (!user || user.mustChangePassword) {
+      setApiStatus(null)
+      return
+    }
     let cancelled = false
 
     const load = async () => {
@@ -40,7 +51,7 @@ export default function App() {
       cancelled = true
       window.clearInterval(id)
     }
-  }, [])
+  }, [user])
 
   useEffect(() => {
     try {
@@ -49,6 +60,22 @@ export default function App() {
       // ignore storage failures
     }
   }, [viewMode])
+
+  if (loading) {
+    return (
+      <div className="flex min-h-svh flex-col items-center justify-center gap-3 bg-cream text-stone">
+        <span className="flex h-14 w-14 items-center justify-center rounded-2xl bg-ink text-champagne shadow-xl">
+          <Gem className="h-6 w-6" />
+        </span>
+        <span className="flex items-center gap-2 text-sm">
+          <Loader2 className="h-4 w-4 animate-spin" />
+          正在验证登录状态…
+        </span>
+      </div>
+    )
+  }
+
+  if (!user) return <LoginPage onLogin={login} />
 
   return (
     <div className="min-h-svh bg-cream">
@@ -79,7 +106,14 @@ export default function App() {
         onViewModeChange={setViewMode}
         galleryCount={items.length}
         taskCount={taskItems.length}
+        studioBusy={studioBusy}
         apiStatus={apiStatus}
+        user={user}
+        onChangePassword={() => setShowChangePassword(true)}
+        onLogout={() => {
+          void logout()
+          setTab('studio')
+        }}
       />
 
       <div
@@ -90,7 +124,8 @@ export default function App() {
         }
       >
         <main className="w-full">
-          {tab === 'studio' ? (
+          {/* Studio stays mounted so in-flight generations survive tab switches */}
+          <div hidden={tab !== 'studio'}>
             <Studio
               isMobilePreview={viewMode === 'mobile'}
               apiStatus={apiStatus}
@@ -98,8 +133,10 @@ export default function App() {
               onGenerated={(arts) => {
                 add(arts)
               }}
+              onGeneratingChange={setStudioBusy}
             />
-          ) : tab === 'gallery' ? (
+          </div>
+          {tab === 'studio' ? null : tab === 'gallery' ? (
             <Gallery
               items={items}
               onFavorite={toggleFavorite}
@@ -119,6 +156,14 @@ export default function App() {
           AuraStudio · 密钥仅存服务端 · 浏览器不直连第三方 API
         </footer>
       </div>
+
+      {(showChangePassword || user.mustChangePassword) && (
+        <ChangePasswordModal
+          forced={user.mustChangePassword}
+          onClose={() => setShowChangePassword(false)}
+          onSubmit={changePassword}
+        />
+      )}
     </div>
   )
 }
